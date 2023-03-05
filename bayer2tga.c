@@ -18,10 +18,18 @@
           | Gb | B  | Gb | B  | Gb | B  | Gb | B  | Gb | B  |
           +----+----+----+----+----+----+----+----+----+----+
         * Gr are green pixels in the red rows, and Gb in the blue rows
+        * The output format is a simple G B R, 8-bit per color, not including
+          the header:
+          +---+---+---+---+---+---+---+---+---+
+          | G | B | R | G | B | R | G | B | R |
+          +---+---+---+---+---+---+---+---+---+
+          | G | B | R | G | B | R | G | B | R |
+          +---+---+---+---+---+---+---+---+---+
     
     Since there are two greens for each output pixel, a simple average is
     performed between them, while the red and the blue ones remain their
-    value.
+    value. This will not produce the best results, there are others, check
+    out this paper: https://www.researchgate.net/publication/227014366_Real-time_GPU_color-based_segmentation_of_football_players
     
     The output format is simple BGR bitmap with 8 bits per color. When
     the file is saved, a small TGA header is added so it can be opened in
@@ -41,8 +49,8 @@
 #define WIDTH           (1920)                   // Pixels width
 #define HEIGHT          (1080)                   // Pixels height
 
-#define RG10_BITS       (10)                     // 10 bits max per color
-#define RGB_BITS        (8)                      // 10 bits max per color
+#define RG10_BITS       (10)                     // Bits (max) per input RG10 color, practically will be 16 bits
+#define RGB_BITS        (8)                      // Bits per output RGB color
 #define MAX_RG10        ((1<<RG10_BITS)-1)       // Max color value
 #define MAX_RGB         ((1<<RGB_BITS)-1)        // Max color value
 
@@ -51,24 +59,25 @@
 #define RG10_COLORS     (4)                      // Colors in a RG10 pixel
 #define RGB_COLORS      (3)                      // Colors in an RGB pixel
 
-#define RG10_Gb         (WIDTH*RG10_COLOR_SIZE)  // Location of the green color of blue row in an RG10 pixel
 #define RG10_R          (0)                      // Location of the red color in an RG10 pixel
+#define RG10_Gr         (RG10_R+1)               // Location of the green color of red row in an RG10 pixel
+#define RG10_Gb         (WIDTH*RG10_COLOR_SIZE)  // Location of the green color of blue row in an RG10 pixel
 #define RG10_B          (RG10_Gb+1)              // Location of the blue color in an RG10 pixel
-#define RG10_Gr         (1)                      // Location of the green color of red row in an RG10 pixel
+
 #define RGB_R           (2)                      // Location of the red color in an RGB pixel
 #define RGB_G           (1)                      // Location of the green color in an RGB pixel
 #define RGB_B           (0)                      // Location of the blue color in an RGB pixel
 
-#define RG10_SIZE       (WIDTH*HEIGHT*RG10_COLORS*RG10_COLOR_SIZE) // Total frame size
-#define RGB_SIZE        (WIDTH*HEIGHT*RGB_COLORS*RGB_COLOR_SIZE) // Total RGB image size
+#define RG10_SIZE       (WIDTH*HEIGHT*RG10_COLORS*RG10_COLOR_SIZE) // Total RG10 input frame size
+#define RGB_SIZE        (WIDTH*HEIGHT*RGB_COLORS*RGB_COLOR_SIZE) // Total RGB output image size
 
-#define NORM(V)         (V*((float)MAX_RGB/MAX_RG10)) // Normilize the color to output format
+#define NORM(V)         (V*((float)MAX_RGB/MAX_RG10)) // Normilize a color (V for value) to output size
 
 #define RG10_LOCATION(X, Y, COLOR) (Y*WIDTH*RG10_COLORS+X*RG10_COLOR_SIZE+COLOR) // Location of a pixel in an RG10 frame
 #define RGB_LOCATION(X, Y, COLOR)  (Y*WIDTH*RGB_COLORS+X*RGB_COLORS+COLOR) // Location of a pixel in an RGB frame
 
-// Read the file from disk. Takes into account standard frame
-// size and doesn't check the file size.
+// Read the file from disk. Doesn't check the file size, using
+// a preset frame size of 1920x1080x2x4=16,588,800 bytes.
 uint16_t *read_file(char *name)
 {
     FILE *file;
@@ -79,8 +88,8 @@ uint16_t *read_file(char *name)
     file = fopen(name, "rb");
     if (!file)
     {
-        fprintf(stderr, "Unable to open file %s", name);
-        return NULL;
+        fprintf(stderr, "Unable to open file %s for reading.\n", name);
+        exit(-1);
     }
     fread(buff, 1, RG10_SIZE, file);
     fclose(file);
@@ -104,15 +113,15 @@ void write_tga(char *name, uint8_t *buff)
     file = fopen(name, "wb");
     if (!file)
     {
-        fprintf(stderr, "Unable to open file %s for writing", name);
-        return;
+        fprintf(stderr, "Unable to open file %s for writing.\n", name);
+        exit(-1);
     }
     fwrite(tga_header, sizeof(tga_header), 1, file);
     fwrite(buff, 1, RGB_SIZE, file);
     fclose(file);
 }
 
-// Find the min and max values for any color
+// Find the min and max values for any of the colors.
 void min_max_frame(uint16_t *buffer, uint16_t *min, uint16_t *max)
 {
     *max = 0;
@@ -137,7 +146,7 @@ void min_max_frame(uint16_t *buffer, uint16_t *min, uint16_t *max)
     }
 }
 
-// Normalize the Bayer RG10 frame with min = 0 and max = 1023
+// Normalize the Bayer RG10 frame with min = 0 and max = 1023.
 void normalize_frame(uint16_t *buffer)
 {
     uint16_t min, max;
@@ -157,7 +166,7 @@ void normalize_frame(uint16_t *buffer)
     }
 }
 
-// Perform the actual de-Bayering, coverting RGGB to RGB image
+// Perform the actual de-Bayering, coverting RGGB to RGB image.
 uint8_t *debayer(uint16_t *buffer)
 {
     uint8_t *image = malloc(RGB_SIZE);
@@ -165,22 +174,21 @@ uint8_t *debayer(uint16_t *buffer)
     {
         for(int x = 0; x < WIDTH; x++)
         {
+            *(image + RGB_LOCATION(x, y, RGB_R)) =  NORM(*(buffer + RG10_LOCATION(x, y, RG10_R)));
+            *(image + RGB_LOCATION(x, y, RGB_B)) =  NORM(*(buffer + RG10_LOCATION(x, y, RG10_B)));
             *(image + RGB_LOCATION(x, y, RGB_G)) = NORM((*(buffer + RG10_LOCATION(x, y, RG10_Gb)) +
                                                          *(buffer + RG10_LOCATION(x, y, RG10_Gr))) / 2);
-            *(image + RGB_LOCATION(x, y, RGB_B)) =  NORM(*(buffer + RG10_LOCATION(x, y, RG10_B)));
-            *(image + RGB_LOCATION(x, y, RGB_R)) =  NORM(*(buffer + RG10_LOCATION(x, y, RG10_R)));
         }
     }
     return image;
 }
 
-// The first argument is the input raw file name, the second is the output file
+// The first argument is the input raw file name, the second is the
+// output file to save to disk.
 int main(int argc, char *argv[])
 {
-    uint16_t max, min;
-
     uint16_t *buffer = read_file(argv[1]);  // Read the frame
-    normalize_frame(buffer);                // Normalize it
+    normalize_frame(buffer);                // Normalize it (optional step)
     uint8_t *image = debayer(buffer);       // Debayer
     write_tga(argv[2], image);              // Save back to the disk
 
