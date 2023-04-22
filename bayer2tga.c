@@ -28,8 +28,9 @@
     
     Since there are two greens for each output pixel, a simple average is
     performed between them, while the red and the blue ones remain their
-    value. This will not produce the best results, there are others, check
-    out this paper: https://www.researchgate.net/publication/227014366_Real-time_GPU_color-based_segmentation_of_football_players
+    value. This will not produce the best results, there are better methods
+    out there. Check out this paper:
+    https://www.researchgate.net/publication/227014366_Real-time_GPU_color-based_segmentation_of_football_players
     
     The output format is simple BGR bitmap with 8 bits per color. When
     the file is saved, a small TGA header is added so it can be opened in
